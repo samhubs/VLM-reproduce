@@ -6,10 +6,19 @@ import torch
 IMAGENET_STANDARD_MEAN = [0.5, 0.5, 0.5]
 IMAGENET_STANDARD_STD = [0.5, 0.5, 0.5]
 
+
+def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_len, image_token):
+    return f"{image_token * image_seq_len}{bos_token}{prefix_prompt}\n"
+
+
 def resize(
-    h, w = size,
-    resized_image = image.resize((w, h), resample=resample, reducing_gap=reducing_gap),
-)
+    image: Image,
+    size: Tuple[int, int],
+    resample: Image.Resampling = None,
+    reducing_gap: Optional[int] = None,
+) -> np.ndarray:
+    h, w = size
+    resized_image = image.resize((w, h), resample=resample, reducing_gap=reducing_gap)
     return resized_image
 
 def rescale(image, scale, dtype: np.dtype = np.float32):
@@ -31,7 +40,7 @@ def process_image(
     rescale_factor: float = None, 
     image_mean: Optional[Union[float, List[float]]] = None, 
     image_std: Optional[Union[float, List[float]]] = None, 
-) -> List[np.ndarray]
+) -> List[np.ndarray]:
 
     h, w = size[0], size[1]
     images = [resize(image=image, size=(h, w), resample=resample) for image in images]
@@ -45,9 +54,9 @@ def process_image(
 
 
 class PaliGemmaProcessor:
-    
+
     IMAGE_TOKEN = "<image>"
-    
+
     def __init__(self, tokenizer, num_image_tokens: int, image_size: int):
         super().__init__()
         self.image_seq_length = num_image_tokens
@@ -63,8 +72,8 @@ class PaliGemmaProcessor:
         tokenizer.add_bos_token = False
         tokenizer.add_eos_token = False
         self.tokenizer = tokenizer  
-        
-    
+
+
     def __call__(self, text: List[str], images = List[Image.Image], padding: str = "longest", truncation: bool = True) -> dict:
         assert len(images) == 1 and len(text) == 1, f"received {len(images)} images and {len(text)} prompts"
 
@@ -76,15 +85,29 @@ class PaliGemmaProcessor:
             image_mean=IMAGENET_STANDARD_MEAN,
             image_std=IMAGENET_STANDARD_STD
             )
-        
-        pixel_value = np.stack(pixel_values, axis=0)
+
+        pixel_values = np.stack(pixel_values, axis=0)
         pixel_values = torch.tensor(pixel_values)
-        
+
         input_strings = [
             add_image_tokens_to_prompt(
                 prefix_prompt=prompt,
-                bos_token=se
+                bos_token=self.tokenizer.bos_token,
+                image_seq_len=self.image_seq_length,
+                image_token=self.IMAGE_TOKEN,
             )
             for prompt in text
         ]
+        # Returns the input_ids and attention_mask as pytorch tensors
+        #Hello world -> [5, 2, 9] -> [[1024 dim embedding], [], []]
+        inputs = self.tokenizer(
+            input_strings,
+            return_tensor="pt",
+            padding=padding,
+            truncation=truncation,
+        )
+
+        return_data = {"pixel_values": pixel_values, **inputs}
+
+        return return_data
 
