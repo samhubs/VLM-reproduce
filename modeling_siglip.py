@@ -101,19 +101,16 @@ class SiglipAttention(nn.Module):
             )
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_output = torch.matmul(attn_weights, value_states)
-        
+
         if attn_output.size() != (batch_size, self.num_heads, seq_len, self.head_dim):
             raise ValueError()
-        
+
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(batch_size, seq_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
-        
+
         return attn_output, attn_weights
-        
-        
-        
-        
+
 class SiglipMLP(nn.Module):
     def __init__(self, config: SigLipVisionConfig):
         super().__init__()
@@ -126,8 +123,6 @@ class SiglipMLP(nn.Module):
         hidden_states = nn.functional.gelu(hidden_states, approximate="tanh")
         hidden_states = self.fc2(hidden_states)
         return hidden_states
-        
-        
 
 class SiglipEncoderLayer(nn.Module):
     def __init__(self, config: SigLipVisionConfig):
@@ -151,6 +146,21 @@ class SiglipEncoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual2 + hidden_states
         return hidden_states
+
+
+class SiglipEncoder(nn.Module):
+    def __init__(self, config: SigLipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList([SiglipEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+
+    def forward(self, input_embeds):
+        hidden_states = input_embeds
+        for encoder_layer in self.layers:
+            hidden_states = encoder_layer(hidden_states)
+        return hidden_states
+
+
 
 
 class SiglipVisionTransformer(nn.Module):
