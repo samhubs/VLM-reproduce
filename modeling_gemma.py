@@ -70,9 +70,17 @@ class PaliGemmaConfig():
         self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2
         self.vision_config.projection_dim = projection_dim
         
-        
+class PaliGemmaMultiModalProjector(nn.Module):
+    def __init__(self, config: PaliGemmaConfig):
+        super().__init__()
+        self.linear = nn.Linear(config.vision_config.hidden_size, config.vision_config.projection_dim, bias=True)
+    
+    def forward(self, image_features):
+        hidden_states = self.linear(image_features)
+        return hidden_states
     
 class PaliGemmaForConditionalGeneration(nn.Module):
+    
     def __init__(self, config: PaliGemmaConfig):
         super().__init__()
         self.config = config
@@ -87,7 +95,53 @@ class PaliGemmaForConditionalGeneration(nn.Module):
     def tie_weights(self):
         return self.language_model.tie_weights()
 
-
+    def merge_input_ids_with_image_features(self,
+                                            image_features,
+                                            input_embeds,
+                                            input_ids,
+                                            attention_mask,
+                                            kv_cache):
+        _, _, embed_dim = image_features.shape
+        batch_size, sequence_length = input_ids.shape
+        dtype, device = input_embeds.dtype, input_embeds.device
+        scaled_image_features = image_features/(self.config.hidden_size)**0.5
+        final_embeddings = torch.zeros(batch_size, sequence_length, embed_dim, dtype=input_embeds.dtype, device=input_embeds.device)
+        #shape: [Batch_size, sequence_length]
+        #input_ids = [[567, 567, 567, 567, 567, 1, 3, 4, 6, 7, 4, 2],[...]] where 1 is <bos> and 2 is \n
+        text_mask = (input_ids != self.config.image_token_index) & (input_ids != self.pad_token_id)
+        image_mask = input_ids == self.config.image_token_index
+        pad_mask = input_ids == self.pad_token_id
+        
+        text_mask_expanded = text_mask.unsqueeze(-1).expand(-1, -1, embed_dim)
+        pad_mask_expanded = pad_mask.unsqueeze(-1).expand(-1, -1), embed_dim)
+        image_mask_expanded = image_mask.unsqueeze(-1).expand(-1, -1), embed_dim)
+        #copying text embeddings into the final embeddings
+        final_embeddings = torch.where(text_mask_expanded, input_embeds, final_embeddings)
+        #copying the image embeddings
+        final_embeddings = final_embeddings.masked_scatter(image_mask_expanded, scaled_image_features)
+    
+        #estimating the attention mask
+        min_dtype = torch.finfo(dtype).min
+        q_len = input_embeds.shape[1]
+        
+        if kv_cache is None or kv_cache.num_items() == 0:
+            causal_mask = torch.full((batch_size, q_len, q_len), fill_value=0, dtype=dtype, device=device)
+        else:
+            assert q_len == 1
+            kv_len = kv_cache.num_items() + q_len
+            causal_mask = torch.full((batch_size, q_len, kv_len), fill_value=0, dtype=dtype, device=device)
+        
+        causal_mask = causal_mask.unsqueeze(1)
+        
+        if kv_cache is not None or kv_cache.num_items() > 0:
+            position_ids = attention_mask.cumsum(-1)[:, -1]
+            if position_ids.dim() == 1:
+                position_ids = position_ids.unsqueeze(0)
+        else:
+            position_ids = (attention_mask.cumsum(-1)).mask_fill_((attention_mask == 0), 1).to(device)
+        
+        return final_embeddings, causal_mask, position_ids        
+    
     def forward(
         self,
         input_ids: torch.LongTensor = None, 
