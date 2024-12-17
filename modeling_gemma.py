@@ -70,7 +70,53 @@ class PaliGemmaConfig():
         self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2
         self.vision_config.projection_dim = projection_dim
 
-class 
+class GemmaRMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.zeros(dim))
+        
+    def norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    
+    def forward(self, x):
+        output = self.norm(x.float())
+        output = output*(1 + self.weight.float())
+        return output.type_as(x)
+class GemmaModel(nn.Module):
+    
+    def __init__(self, config: GemmaConfig):
+        super().__init__()
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        
+        self.embed_tokens = nn.Embeddings(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.ModuleList([GemmaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])
+        self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+    
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def forward(self,
+            attention_mask,
+            position_ids,
+            input_embeds,
+            kv_cache):
+        hidden_states = input_embeds
+        normalizer = torch.tensor(self.config.hidden_size**2, dtype=hidden_states.dtype)
+        hidden_states = hidden_states*normalizer
+        
+        for decoder_layer in self.layers:
+            hidden_states = decoder_layer(hidden_states, 
+                                         attention_mask, 
+                                         position_ids, 
+                                         kv_cache
+                                         )
+        hidden_states = self.norm(hidden_states)
+            
+        return hidden_states 
+            
 class GemmaForCausalLM(nn.Module):
     def __init__(self, config):
         super().__init__()

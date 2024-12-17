@@ -88,7 +88,8 @@ class SiglipAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
         #[batch_size, num_patches, embed_dim]
-        #[batch_size, num_patches, num_heads, head_dim]
+        #before transpose: [batch_size, num_patches, num_heads, head_dim]
+        #after transpose: [batch_size, num_heads, num_patches, head_dim]
         query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -117,7 +118,7 @@ class SiglipMLP(nn.Module):
         self.config = config
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
         self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
-    
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.fc1(hidden_states)
         hidden_states = nn.functional.gelu(hidden_states, approximate="tanh")
